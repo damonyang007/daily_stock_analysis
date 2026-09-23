@@ -12,6 +12,12 @@
   - 桌面端改动在 `apps/dsa-desktop/`
   - 部署与流水线改动在 `scripts/`、`.github/workflows/`、`docker/`
 - 未经明确确认，不执行 `git commit`、`git tag`、`git push`。
+- **本仓库 Git 远端规则（永远遵守，仅限本项目）**：
+  - `origin` 只指向用户自己的 fork（`damonyang007/daily_stock_analysis`）；本地改动只能 commit / push 到 `origin`。
+  - 原作者仓库只作 `upstream`，仅允许 `fetch` / `merge` 同步；禁止 push 上游（`git remote set-url --push upstream DISABLE`）。
+  - push 前确认 `.env` / `*.env` 已被 ignore，diff 中无 token / API key。
+  - 与上游同步：`git fetch upstream && git merge upstream/main && git push origin main`；冲突时优先保留本地修复，改完重跑相关测试。
+  - 未经用户明确要求，不新增 remote、不改上述拓扑。
 - commit message 使用英文，不添加 `Co-Authored-By`。
 - 不写死密钥、账号、路径、模型名、端口或环境差异逻辑。
 - 优先复用现有模块、配置入口、脚本和测试，不新增平行实现。
