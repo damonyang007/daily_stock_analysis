@@ -3333,6 +3333,81 @@ class SystemConfigServiceTestCase(unittest.TestCase):
         self.assertEqual(mock_completion.call_count, 1)
 
     @patch("litellm.completion")
+    def test_test_llm_channel_passes_request_extra_headers_to_completion(self, mock_completion) -> None:
+        mock_completion.return_value = self._mock_completion_response("OK")
+
+        payload = self.service.test_llm_channel(
+            name="ccswitch",
+            protocol="openai",
+            api_surface="chat_completions",
+            base_url="http://127.0.0.1:15721/v1",
+            api_key="cc-switch-local",
+            models=["mimo-v2.6-flash"],
+            extra_headers={"x-opencode-session": "dsa-test-session"},
+        )
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(
+            mock_completion.call_args.kwargs["extra_headers"],
+            {"x-opencode-session": "dsa-test-session"},
+        )
+
+    @patch("litellm.completion")
+    def test_test_llm_channel_falls_back_to_saved_extra_headers_when_request_omits_them(
+        self,
+        mock_completion,
+    ) -> None:
+        mock_completion.return_value = self._mock_completion_response("OK")
+        env_key = "LLM_CCSWITCH_EXTRA_HEADERS"
+        previous = os.environ.get(env_key)
+        os.environ[env_key] = json.dumps({"x-opencode-session": "dsa-saved-session"})
+        try:
+            payload = self.service.test_llm_channel(
+                name="ccswitch",
+                protocol="openai",
+                api_surface="chat_completions",
+                base_url="http://127.0.0.1:15721/v1",
+                api_key="cc-switch-local",
+                models=["mimo-v2.6-flash"],
+            )
+        finally:
+            if previous is None:
+                os.environ.pop(env_key, None)
+            else:
+                os.environ[env_key] = previous
+
+        self.assertTrue(payload["success"])
+        self.assertEqual(
+            mock_completion.call_args.kwargs["extra_headers"],
+            {"x-opencode-session": "dsa-saved-session"},
+        )
+
+    @patch("litellm.completion")
+    def test_test_llm_channel_forwards_extra_headers_to_capability_checks(self, mock_completion) -> None:
+        tool_call = SimpleNamespace(function=SimpleNamespace(name="dsa_probe_echo"))
+        mock_completion.side_effect = [
+            self._mock_completion_response("OK"),
+            self._mock_completion_response('{"status":"ok"}'),
+            self._mock_completion_response("", tool_calls=[tool_call]),
+        ]
+
+        payload = self.service.test_llm_channel(
+            name="ccswitch",
+            protocol="openai",
+            api_surface="chat_completions",
+            base_url="http://127.0.0.1:15721/v1",
+            api_key="cc-switch-local",
+            models=["mimo-v2.6-flash"],
+            capability_checks=["json", "tools"],
+            extra_headers={"x-opencode-session": "dsa-cap-session"},
+        )
+
+        self.assertTrue(payload["success"])
+        expected = {"x-opencode-session": "dsa-cap-session"}
+        for call in mock_completion.call_args_list:
+            self.assertEqual(call.kwargs.get("extra_headers"), expected)
+
+    @patch("litellm.completion")
     def test_test_llm_channel_falls_back_to_message_content_when_content_blocks_empty(
         self,
         mock_completion,

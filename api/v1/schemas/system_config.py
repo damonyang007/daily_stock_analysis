@@ -284,6 +284,7 @@ class TestLLMChannelRequest(BaseModel):
     timeout_seconds: float = 20.0
     capability_checks: List[LLMCapabilityCheck] = Field(default_factory=list)
     use_saved_secret: bool = False
+    extra_headers: Optional[Dict[str, str]] = None
 
 
 class LLMCapabilityCheckResult(BaseModel):

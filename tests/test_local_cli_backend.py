@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 from types import SimpleNamespace
 
@@ -3108,3 +3109,84 @@ print(json.dumps({{"sentiment_score": 60}}))
     assert len(intervals) == 2
     intervals.sort(key=lambda item: item["start"])
     assert intervals[1]["start"] >= intervals[0]["end"]
+
+
+def test_temporary_cli_working_directory_ignores_cleanup_errors(monkeypatch) -> None:
+    captured: dict = {}
+    real_temporary_directory = tempfile.TemporaryDirectory
+
+    def spy(*args, **kwargs):
+        captured.update(kwargs)
+        return real_temporary_directory(*args, **kwargs)
+
+    monkeypatch.setattr(local_cli_backend_module.tempfile, "TemporaryDirectory", spy)
+
+    with local_cli_backend_module._temporary_cli_working_directory() as cwd:
+        assert Path(cwd).is_dir()
+
+    assert captured.get("ignore_cleanup_errors") is True
+    assert captured.get("prefix") == "dsa-local-cli-"
+
+
+def test_successful_generation_survives_temp_dir_cleanup_permission_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    backend = _backend(
+        tmp_path,
+        """
+import json, sys
+print(json.dumps({"sentiment_score": 71}, ensure_ascii=False))
+""",
+    )
+    real_exit = tempfile.TemporaryDirectory.__exit__
+
+    def failing_exit(self, exc_type, exc_val, exc_tb):
+        real_exit(self, exc_type, exc_val, exc_tb)
+        raise PermissionError(13, "Permission denied: dsa-local-cli-locked")
+
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "__exit__", failing_exit)
+
+    result = backend.generate(
+        "hello",
+        {},
+        response_validator=lambda text: json.loads(text),
+    )
+
+    assert json.loads(result.text)["sentiment_score"] == 71
+    assert "temp_cleanup_error" in result.diagnostics
+    assert "Permission denied" in result.diagnostics["temp_cleanup_error"]
+
+
+def test_process_start_oserror_still_maps_unknown_backend_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    backend = _backend(
+        tmp_path,
+        """
+import json
+print(json.dumps({"sentiment_score": 1}))
+""",
+    )
+    real_exit = tempfile.TemporaryDirectory.__exit__
+
+    def failing_exit_before_success(self, exc_type, exc_val, exc_tb):
+        real_exit(self, exc_type, exc_val, exc_tb)
+        if exc_type is None:
+            raise PermissionError(13, "Permission denied: dsa-local-cli-locked")
+        return None
+
+    # Simulate OSError while body still has no successful text: inject on enter
+    real_enter = tempfile.TemporaryDirectory.__enter__
+
+    def failing_enter(self):
+        real_enter(self)
+        raise PermissionError(13, "Permission denied: dsa-local-cli-start")
+
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "__enter__", failing_enter)
+    monkeypatch.setattr(tempfile.TemporaryDirectory, "__exit__", real_exit)
+
+    with pytest.raises(GenerationError) as exc_info:
+        backend.generate("prompt", {})
+
+    assert exc_info.value.error_code is GenerationErrorCode.UNKNOWN_BACKEND_ERROR
+    assert exc_info.value.details["reason"] == "process_start_failed"

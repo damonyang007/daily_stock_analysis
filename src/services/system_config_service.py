@@ -1216,6 +1216,7 @@ class SystemConfigService:
         timeout_seconds: float = 20.0,
         capability_checks: Sequence[str] = (),
         use_saved_secret: bool = False,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Run a minimal completion call against one channel definition."""
         requested_capabilities = self._normalize_llm_capability_checks(capability_checks)
@@ -1223,6 +1224,10 @@ class SystemConfigService:
         channel_name = name.strip() or "channel"
         resolved_api_surface = normalize_llm_channel_api_surface(api_surface)
         generation_stage = "responses" if resolved_api_surface == "responses" else "chat_completion"
+        resolved_headers = self._resolve_test_channel_extra_headers(
+            channel_name=channel_name,
+            extra_headers=extra_headers,
+        )
         resolved_secret, secret_error, redaction_values = self._resolve_hermes_saved_secret(
             channel_name=channel_name,
             protocol=protocol,
@@ -1336,6 +1341,8 @@ class SystemConfigService:
             call_kwargs["api_key"] = selected_api_key
         if base_url.strip():
             call_kwargs["api_base"] = base_url.strip()
+        if resolved_headers and not is_reserved_hermes_name(channel_name):
+            call_kwargs["extra_headers"] = dict(resolved_headers)
         call_kwargs = apply_litellm_generation_params(
             call_kwargs,
             wire_model,
@@ -1435,6 +1442,7 @@ class SystemConfigService:
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
                     capability_checks=requested_capabilities,
+                    extra_headers=resolved_headers if not is_reserved_hermes_name(channel_name) else None,
                 )
             return self._build_llm_channel_result(
                 success=True,
@@ -1598,6 +1606,53 @@ class SystemConfigService:
                 )
         return results
 
+    def _resolve_test_channel_extra_headers(
+        self,
+        *,
+        channel_name: str,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, str]:
+        """Resolve channel extra headers for a test request.
+
+        Prefer request-provided headers (draft edits); otherwise fall back to
+        the saved ``LLM_<NAME>_EXTRA_HEADERS`` value so Web "test connection"
+        matches runtime LiteLLM routing for the same channel.
+        """
+        if is_reserved_hermes_name(channel_name):
+            return {}
+        if isinstance(extra_headers, dict) and extra_headers:
+            resolved: Dict[str, str] = {}
+            for key, value in extra_headers.items():
+                text_key = str(key).strip()
+                if not text_key:
+                    continue
+                resolved[text_key] = "" if value is None else str(value)
+            if resolved:
+                return resolved
+        env_key = f"LLM_{channel_name.strip().upper()}_EXTRA_HEADERS"
+        raw_value = (os.getenv(env_key, "") or "").strip()
+        if not raw_value:
+            try:
+                raw_value = (self._manager.read_config_map().get(env_key) or "").strip()
+            except Exception:
+                raw_value = ""
+        if not raw_value:
+            return {}
+        try:
+            payload = json.loads(raw_value)
+        except json.JSONDecodeError:
+            logger.warning("%s: invalid JSON, ignored for channel test", env_key)
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        resolved = {}
+        for key, value in payload.items():
+            text_key = str(key).strip()
+            if not text_key:
+                continue
+            resolved[text_key] = "" if value is None else str(value)
+        return resolved
+
     @classmethod
     def _run_llm_capability_checks(
         cls,
@@ -1608,8 +1663,10 @@ class SystemConfigService:
         base_url: str,
         timeout_seconds: float,
         capability_checks: Sequence[str],
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Dict[str, Any]]:
         results: Dict[str, Dict[str, Any]] = {}
+        headers_extra = {"extra_headers": dict(extra_headers)} if extra_headers else None
         for capability in capability_checks:
             if capability == "json":
                 results[capability] = cls._run_json_capability_check(
@@ -1618,6 +1675,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    headers_extra=headers_extra,
                 )
             elif capability == "tools":
                 results[capability] = cls._run_tools_capability_check(
@@ -1626,6 +1684,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    headers_extra=headers_extra,
                 )
             elif capability == "stream":
                 results[capability] = cls._run_stream_capability_check(
@@ -1634,6 +1693,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    headers_extra=headers_extra,
                 )
             elif capability == "vision":
                 results[capability] = cls._run_vision_capability_check(
@@ -1642,6 +1702,7 @@ class SystemConfigService:
                     selected_api_key=selected_api_key,
                     base_url=base_url,
                     timeout_seconds=timeout_seconds,
+                    headers_extra=headers_extra,
                 )
         return results
 
@@ -1654,6 +1715,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        headers_extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
             started_at = time.perf_counter()
@@ -1665,7 +1727,10 @@ class SystemConfigService:
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": 'Return exactly this JSON object: {"status":"ok"}'}],
                     max_tokens=64,
-                    extra={"response_format": {"type": "json_object"}},
+                    extra={
+                        **(headers_extra or {}),
+                        "response_format": {"type": "json_object"},
+                    },
                 )
             )
             latency_ms = int((time.perf_counter() - started_at) * 1000)
@@ -1722,6 +1787,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        headers_extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         tools = [
             {
@@ -1748,6 +1814,7 @@ class SystemConfigService:
                     messages=[{"role": "user", "content": "Call the dsa_probe_echo tool with text set to ok."}],
                     max_tokens=64,
                     extra={
+                        **(headers_extra or {}),
                         "tools": tools,
                         "tool_choice": {"type": "function", "function": {"name": "dsa_probe_echo"}},
                     },
@@ -1785,6 +1852,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        headers_extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         stream = None
         started_at = time.perf_counter()
@@ -1797,7 +1865,10 @@ class SystemConfigService:
                     timeout_seconds=timeout_seconds,
                     messages=[{"role": "user", "content": "Reply with OK"}],
                     max_tokens=32,
-                    extra={"stream": True},
+                    extra={
+                        **(headers_extra or {}),
+                        "stream": True,
+                    },
                 )
             )
             for index, chunk in enumerate(stream):
@@ -1843,6 +1914,7 @@ class SystemConfigService:
         selected_api_key: str,
         base_url: str,
         timeout_seconds: float,
+        headers_extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
             started_at = time.perf_counter()
@@ -1862,6 +1934,7 @@ class SystemConfigService:
                         }
                     ],
                     max_tokens=32,
+                    extra=dict(headers_extra or {}),
                 )
             )
             latency_ms = int((time.perf_counter() - started_at) * 1000)

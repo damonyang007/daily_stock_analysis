@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [文档] 将仓库内所有 SerpApi 链接统一更新为新的赞助转化追踪地址。
 - [修复] 智能导入兼容带 UTF-8 BOM 的 CSV 与剪贴板文本，避免 `code` 表头被误当成数据并丢失有效股票代码。
 - [修复] 为 AkShare 大盘涨跌统计的东财与新浪降级调用增加可强制终止的子进程超时，避免外部接口无响应时长期占用分析线程（Fixes #2340）。
+- [修复] Web「测试连接」透传 `LLM_<CHANNEL>_EXTRA_HEADERS`：`test-channel` 请求与能力检测均注入 `extra_headers`，请求未携带时回退已存渠道头（修复 OpenCode 会话等自定义头渠道测试报 `MissingSessionID`）。
+- [修复] 本地 CLI generation 在 Windows 临时目录清理失败（子进程仍占用 cwd 的 `PermissionError`）时不再误报 `unknown_backend_error` 并丢弃已成功响应：临时目录 `ignore_cleanup_errors`，成功后的 cleanup 错误记入 `temp_cleanup_error` diagnostics。
 
 <!-- 新条目格式：- [类型] 描述（类型取值：新功能/改进/修复/文档/测试/chore）-->
 <!-- 每条独立一行追加到本段末尾，无需分类标题，合并时冲突最小 -->

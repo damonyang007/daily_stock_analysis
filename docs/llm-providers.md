@@ -55,7 +55,7 @@ Phase 6a Tool Surface 是 AgentBackend 的唯一内部工具面：统一 DSA 工
 2. 在「快速添加渠道」选择服务商预设。
 3. 填入 API Key，必要时点击「获取模型」。
 4. 选择主模型、Agent 主模型、备选模型和 Vision 模型后保存。
-5. 点击「测试连接」确认鉴权、模型名、额度和响应格式正常。
+5. 点击「测试连接」确认鉴权、模型名、额度和响应格式正常。对配置了 `LLM_<CHANNEL>_EXTRA_HEADERS` 的渠道，测试连接与能力检测会自动带上已存自定义头（请求体也可传 `extra_headers` 覆盖草稿）。
 6. 如需确认 JSON / tools / stream / vision 能力，手动勾选「运行时能力检测」后再触发；该检测会产生真实 LLM 请求，结果只代表当前账号、模型和 endpoint 的一次 best-effort 检测，不会写回 `.env`，也不会阻止保存。
 
 ## Channels 示例

@@ -590,6 +590,7 @@ def test_llm_channel(
             timeout_seconds=request.timeout_seconds,
             capability_checks=request.capability_checks,
             use_saved_secret=request.use_saved_secret,
+            extra_headers=request.extra_headers,
         )
         return TestLLMChannelResponse.model_validate(payload)
     except (ValueError, TypeError) as exc:

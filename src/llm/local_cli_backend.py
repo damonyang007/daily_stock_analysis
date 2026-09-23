@@ -2144,7 +2144,7 @@ class LocalCliGenerationBackend(GenerationBackend):
         with _local_cli_concurrency_slot(concurrency_limit):
             self._emit_progress(stream_progress_callback, 0)
             try:
-                with tempfile.TemporaryDirectory(prefix="dsa-local-cli-") as cwd:
+                with _temporary_cli_working_directory() as cwd:
                     cwd_path = Path(cwd)
                     try:
                         cwd_path.chmod(0o700)
@@ -2374,7 +2374,11 @@ class LocalCliGenerationBackend(GenerationBackend):
                         diagnostics["output_source"] = "stdout"
                         text = (stdout or "").strip()
             except OSError as exc:
-                if _is_command_not_executable_error(exc):
+                if text:
+                    diagnostics["temp_cleanup_error"] = redact_diagnostic_text(
+                        str(exc), limit=200
+                    )
+                elif _is_command_not_executable_error(exc):
                     raise self._error(
                         GenerationErrorCode.COMMAND_NOT_EXECUTABLE,
                         stage="execution",
@@ -2386,17 +2390,18 @@ class LocalCliGenerationBackend(GenerationBackend):
                             "error": redact_diagnostic_text(str(exc), limit=200),
                         },
                     ) from exc
-                raise self._error(
-                    GenerationErrorCode.UNKNOWN_BACKEND_ERROR,
-                    stage="execution",
-                    retryable=False,
-                    fallbackable=True,
-                    details={
-                        **diagnostics,
-                        "reason": "process_start_failed",
-                        "error": redact_diagnostic_text(str(exc), limit=200),
-                    },
-                ) from exc
+                else:
+                    raise self._error(
+                        GenerationErrorCode.UNKNOWN_BACKEND_ERROR,
+                        stage="execution",
+                        retryable=False,
+                        fallbackable=True,
+                        details={
+                            **diagnostics,
+                            "reason": "process_start_failed",
+                            "error": redact_diagnostic_text(str(exc), limit=200),
+                        },
+                    ) from exc
 
         raw_result = LocalCliExecutionResult(
             stdout=stdout,
@@ -2850,6 +2855,22 @@ def _is_command_not_executable_error(exc: OSError) -> bool:
     if os.name == "nt" and getattr(exc, "winerror", None) == 193:
         return True
     return False
+
+
+def _temporary_cli_working_directory():
+    """Create the per-call CLI cwd, ignoring cleanup errors when supported.
+
+    On Windows, OpenCode/Node child processes can still hold the temp cwd
+    after the CLI exits; TemporaryDirectory cleanup then raises PermissionError
+    and must not fail an otherwise successful generation.
+    """
+    try:
+        return tempfile.TemporaryDirectory(
+            prefix="dsa-local-cli-",
+            ignore_cleanup_errors=True,
+        )
+    except TypeError:
+        return tempfile.TemporaryDirectory(prefix="dsa-local-cli-")
 
 
 @lru_cache(maxsize=1)

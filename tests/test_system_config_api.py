@@ -870,6 +870,44 @@ class SystemConfigApiTestCase(unittest.TestCase):
         mock_test.assert_called_once()
         self.assertEqual(mock_test.call_args.kwargs["capability_checks"], ["json", "stream"])
         self.assertEqual(mock_test.call_args.kwargs["api_surface"], "responses")
+        self.assertIsNone(mock_test.call_args.kwargs["extra_headers"])
+
+    def test_test_llm_channel_endpoint_forwards_extra_headers(self) -> None:
+        with patch.object(
+            self.service,
+            "test_llm_channel",
+            return_value={
+                "success": True,
+                "message": "LLM channel test succeeded",
+                "error": None,
+                "error_code": None,
+                "stage": "chat_completion",
+                "retryable": False,
+                "details": {},
+                "resolved_protocol": "openai",
+                "resolved_api_surface": "chat_completions",
+                "resolved_model": "openai/mimo-v2.6-flash",
+                "latency_ms": 45,
+            },
+        ) as mock_test:
+            system_config.test_llm_channel(
+                request=TestLLMChannelRequest(
+                    name="ccswitch",
+                    protocol="openai",
+                    api_surface="chat_completions",
+                    base_url="http://127.0.0.1:15721/v1",
+                    api_key="cc-switch-local",
+                    models=["mimo-v2.6-flash"],
+                    extra_headers={"x-opencode-session": "dsa-api-session"},
+                ),
+                service=self.service,
+            )
+
+        mock_test.assert_called_once()
+        self.assertEqual(
+            mock_test.call_args.kwargs["extra_headers"],
+            {"x-opencode-session": "dsa-api-session"},
+        )
 
     def test_test_notification_channel_endpoint_returns_service_payload(self) -> None:
         with patch.object(
